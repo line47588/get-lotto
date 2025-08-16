@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
-import { chromium } from "playwright";
+import fetch from "node-fetch";
+import * as cheerio from "cheerio";
 
 const LIST_URL = "https://news.sanook.com/lotto/";
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -12,7 +13,7 @@ const TH_MONTHS = [
 ];
 
 function thaiDateToYMD(dateStr) {
-  const m = dateStr.match(/(\d{1,2})\s+([^\s]+)\s+(\d{4})/);
+  const m = dateStr?.match(/(\d{1,2})\s+([^\s]+)\s+(\d{4})/);
   if (!m) return null;
   const d = String(parseInt(m[1], 10)).padStart(2, "0");
   const mm = String(TH_MONTHS.indexOf(m[2]) + 1).padStart(2, "0");
@@ -20,78 +21,55 @@ function thaiDateToYMD(dateStr) {
   const year = yearBE - 543;
   return `${year}${mm}${d}`;
 }
+const clean = s =>
+  (s || "").replace(/\u00a0/g, " ").replace(/[ \t]+/g, " ").replace(/\r/g, "").trim();
 
-function cleanLine(s) {
-  return (s || "")
-    .replace(/\u00a0/g, " ")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\r/g, "")
-    .trim();
-}
-
-// ✅ รองรับทั้ง RegExp และ string
-function digitsIn(line, pattern) {
-  const rx = pattern instanceof RegExp ? pattern : new RegExp(pattern, "g");
+function digitsIn(line, rx) {
   const m = line.match(rx);
   return m ? m : [];
 }
 
+async function getLatestCheckUrl() {
+  const res = await fetch(LIST_URL, { headers: { "User-Agent": "curl/8" }});
+  if (!res.ok) throw new Error(`GET list ${res.status}`);
+  const html = await res.text();
+  // หา /lotto/check/xxxxxx/ จากหน้า list
+  const m = html.match(/href="(\/lotto\/check\/\d+\/?)"/);
+  if (!m) throw new Error("ไม่พบลิงก์งวดล่าสุดจากหน้า list");
+  return new URL(m[1], LIST_URL).href;
+}
+
+async function getArticleText(url) {
+  const res = await fetch(url, { headers: { "User-Agent": "curl/8" }});
+  if (!res.ok) throw new Error(`GET article ${res.status}`);
+  const html = await res.text();
+  const $ = cheerio.load(html);
+  const root = $("article").text() || $("[class*='content']").text() || $("body").text();
+  // รวมเป็นบรรทัด ๆ
+  return root.split("\n").map(clean).filter(Boolean);
+}
+
 (async () => {
-  const browser = await chromium.launch({ args: ["--no-sandbox"] });
-  const page = await browser.newPage({
-    userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"
-  });
-
-  // 1) หา URL งวดล่าสุด
-  await page.goto(LIST_URL, { waitUntil: "domcontentloaded" });
-  const latestHref = await page.evaluate(() => {
-    const as = Array.from(document.querySelectorAll("a[href*='/lotto/check/']"));
-    // ถ้ามีหลายลิงก์ เลือกอันแรกสุดบนหน้า (ล่าสุด)
-    return as.length ? new URL(as[0].getAttribute("href"), location.href).href : null;
-  });
-  if (!latestHref) {
-    await browser.close();
-    throw new Error("ไม่พบลิงก์งวดล่าสุดจากหน้า list");
-  }
-
-  // 2) เข้าไปหน้า “ตรวจหวยงวดนี้”
-  await page.goto(latestHref, { waitUntil: "domcontentloaded" });
-
-  // ⏳ รอให้มีเลข 6 หลักโผล่ในหน้า (บางทีคอนเทนต์มาแบบไดนามิก)
-  await page.waitForFunction(() => /\b\d{6}\b/.test(document.body.innerText), { timeout: 15000 })
-    .catch(() => {}); // ถ้าไม่ทันก็ไปต่อ แต่ส่วนมากทัน
-
-  // รออีกนิดให้ทุกบล็อควาดเสร็จ
-  await page.waitForTimeout(1200);
-
-  // ดึงข้อความเฉพาะส่วนบทความ ถ้าไม่เจอ ใช้ทั้ง body
-  const articleText = await page.evaluate(() => {
-    const root = document.querySelector("article") ||
-                 document.querySelector("[class*='content']") ||
-                 document.body;
-    return root.innerText;
-  });
-
-  await browser.close();
-
-  const raw = articleText || "";
-  const lines = raw.split("\n").map(cleanLine).filter(Boolean);
-
-  // เขียนไฟล์ debug
+  const latestHref = await getLatestCheckUrl();
+  const lines = await getArticleText(latestHref);
   const flat = lines.join("\n");
+
+  // วันที่ไทย
   let dateTH =
     (flat.match(/งวดวันที่\s+(\d{1,2}\s+[^\s]+\s+\d{4})/) || [])[1] ||
     (flat.match(/ประจำงวดวันที่\s+(\d{1,2}\s+[^\s]+\s+\d{4})/) || [])[1] || "";
   const ymd = thaiDateToYMD(dateTH) || "00000000";
+
+  // debug raw text เผื่ออยากเปิดดู
   fs.writeFileSync(path.join(DATA_DIR, `raw-${ymd}.txt`), flat);
 
-  // 3) เดินบรรทัดแบบ state machine
+  // เดินบรรทัดแบบ state machine
   const state = { section: null };
   const result = { first: "", near: [], front3: [], back3: [], back2: [] };
-  const isHeader = (line, key) => key.test(line);
+  const isHeader = (line, re) => re.test(line);
 
-  for (let i = 0; i < lines.length; i++) {
-    const L = lines[i];
+  for (const Lraw of lines) {
+    const L = Lraw;
 
     if (isHeader(L, /งวดวันที่/)) {
       const m = L.match(/งวดวันที่\s+(\d{1,2}\s+[^\s]+\s+\d{4})/);
@@ -99,48 +77,40 @@ function digitsIn(line, pattern) {
       state.section = null;
       continue;
     }
-
-    if (isHeader(L, /รางวัลที่\s*1\b|รางวัลที่หนึ่ง/)) { state.section = "first"; continue; }
+    if (isHeader(L, /รางวัลที่\s*1\b|รางวัลที่หนึ่ง/)) { state.section = "first";  continue; }
     if (isHeader(L, /ข้างเคียงรางวัลที่\s*1/))          { state.section = "near";   continue; }
     if (isHeader(L, /เลขหน้า\s*3\s*ตัว/))               { state.section = "front3"; continue; }
     if (isHeader(L, /เลขท้าย\s*3\s*ตัว/))               { state.section = "back3";  continue; }
     if (isHeader(L, /เลขท้าย\s*2\s*ตัว/))               { state.section = "back2";  continue; }
 
-    // เก็บเลขตาม section
     if (state.section === "first" && !result.first) {
-      const nums = digitsIn(L, /\b\d{6}\b/);
-      if (nums.length) result.first = nums[0];
+      const n = digitsIn(L, /\b\d{6}\b/g);
+      if (n.length) result.first = n[0];
       continue;
     }
     if (state.section === "near" && result.near.length < 2) {
-      const nums = digitsIn(L, /\b\d{6}\b/);
-      if (nums.length) result.near.push(...nums);
+      const n = digitsIn(L, /\b\d{6}\b/g);
+      if (n.length) result.near.push(...n);
       continue;
     }
     if (state.section === "front3" && result.front3.length < 4) {
-      const nums = digitsIn(L, /\b\d{3}\b/);
-      if (nums.length) result.front3.push(...nums);
+      const n = digitsIn(L, /\b\d{3}\b/g);
+      if (n.length) result.front3.push(...n);
       continue;
     }
     if (state.section === "back3" && result.back3.length < 4) {
-      const nums = digitsIn(L, /\b\d{3}\b/);
-      if (nums.length) result.back3.push(...nums);
+      const n = digitsIn(L, /\b\d{3}\b/g);
+      if (n.length) result.back3.push(...n);
       continue;
     }
     if (state.section === "back2" && result.back2.length < 1) {
-      const nums = digitsIn(L, /\b\d{2}\b/);
-      if (nums.length) result.back2.push(nums[0]);
+      const n = digitsIn(L, /\b\d{2}\b/g);
+      if (n.length) result.back2.push(n[0]);
       continue;
     }
   }
 
-  console.log("Parsed -> first:", result.first,
-    "| near:", JSON.stringify(result.near),
-    "| front3:", JSON.stringify(result.front3),
-    "| back3:", JSON.stringify(result.back3),
-    "| back2:", JSON.stringify(result.back2));
-
-  // 4) สร้าง JSON ตาม schema เดิม + ใส่ timestamp (ช่วยให้ commit เกิดแน่)
+  // สร้าง JSON ตาม schema เดิม + timestamp เพื่อให้มี diff
   const output = {
     status: "success",
     response: {
@@ -156,16 +126,18 @@ function digitsIn(line, pattern) {
         { id: "runningNumberBackTwo",    name: "รางวัลเลขท้าย 2 ตัว",  reward: "2000", amount: result.back2.length,  number: result.back2 }
       ]
     },
-    scraped_at: new Date().toISOString() // << เอาออกภายหลังได้
+    scraped_at: new Date().toISOString()
   };
 
   const latestPath = path.join(DATA_DIR, "latest.json");
   const datedPath  = path.join(DATA_DIR, `${ymd}.json`);
   fs.writeFileSync(latestPath, JSON.stringify(output, null, 2));
   fs.writeFileSync(datedPath, JSON.stringify(output, null, 2));
-  console.log("✔️ saved:", latestPath, datedPath);
 
-  if (!result.first || !result.front3.length || !result.back3.length || !result.back2.length) {
-    console.warn("⚠️ ยังมีฟิลด์ว่าง: เปิด data/raw-%s.txt เพื่อตรวจรูปแบบบรรทัด", ymd);
-  }
+  console.log("Parsed -> first:", result.first,
+    "| near:", JSON.stringify(result.near),
+    "| front3:", JSON.stringify(result.front3),
+    "| back3:", JSON.stringify(result.back3),
+    "| back2:", JSON.stringify(result.back2));
+  console.log("✔️ saved:", latestPath, datedPath);
 })();
