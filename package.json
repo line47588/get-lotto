@@ -1,0 +1,11 @@
+{
+  "name": "lotto-sanook-json",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "scrape": "node scripts/scrape-sanook.js"
+  },
+  "dependencies": {
+    "playwright": "^1.47.0"
+  }
+}
