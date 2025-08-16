@@ -28,10 +28,12 @@ function cleanLine(s) {
     .replace(/\r/g, "")
     .trim();
 }
+
+// ✅ แก้ให้รองรับทั้ง RegExp และ string (หลีกเลี่ยงบั๊กเดิม)
 function digitsIn(line, pattern) {
-  // คืน array ตัวเลขที่ตรงกับ pattern (เช่น 6 หลัก / 3 หลัก / 2 หลัก)
-  const re = new RegExp(pattern, "g");
-  return (line.match(re) || []);
+  const rx = pattern instanceof RegExp ? pattern : new RegExp(pattern, "g");
+  const m = line.match(rx);
+  return m ? m : [];
 }
 
 (async () => {
@@ -55,7 +57,6 @@ function digitsIn(line, pattern) {
 
   // ดึงข้อความทุกบรรทัดจากบทความ (เฉพาะส่วนเนื้อหา)
   const articleText = await page.evaluate(() => {
-    // กว้าง ๆ: ลองหาคอนเทนเนอร์บทความ ถ้าไม่เจอ ใช้ทั้ง body
     const root =
       document.querySelector("article") ||
       document.querySelector("[class*='content']") ||
@@ -86,7 +87,8 @@ function digitsIn(line, pattern) {
     back2: []
   };
 
-  const isHeader = (line, key) => new RegExp(key).test(line);
+  // ✅ ใช้ .test ตรง ๆ กับ RegExp
+  const isHeader = (line, key) => key.test(line);
 
   for (let i = 0; i < lines.length; i++) {
     const L = lines[i];
@@ -156,7 +158,6 @@ function digitsIn(line, pattern) {
   fs.writeFileSync(datedPath, JSON.stringify(output, null, 2));
   console.log("✔️ saved:", latestPath, datedPath);
 
-  // แจ้งเตือนถ้ายังว่าง จะได้เปิด raw-*.txt มาดูหน้าจริง
   if (!result.first || !result.front3.length || !result.back3.length || !result.back2.length) {
     console.warn("⚠️ ยังมีฟิลด์ว่าง: เปิด data/raw-%s.txt เพื่อตรวจรูปแบบบรรทัด", ymd);
   }
