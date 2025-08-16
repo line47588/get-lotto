@@ -1,0 +1,48 @@
+{
+  "status": "success",
+  "response": {
+    "date": "16 สิงหาคม 2568",
+    "endpoint": "https://news.sanook.com/lotto/check/16082568/",
+    "prizes": [
+      {
+        "id": "prizeFirst",
+        "name": "รางวัลที่ 1",
+        "reward": "6000000",
+        "amount": 1,
+        "number": [
+          ""
+        ]
+      },
+      {
+        "id": "prizeFirstNear",
+        "name": "รางวัลข้างเคียงรางวัลที่ 1",
+        "reward": "100000",
+        "amount": 2,
+        "number": []
+      }
+    ],
+    "runningNumbers": [
+      {
+        "id": "runningNumberFrontThree",
+        "name": "รางวัลเลขหน้า 3 ตัว",
+        "reward": "4000",
+        "amount": 2,
+        "number": []
+      },
+      {
+        "id": "runningNumberBackThree",
+        "name": "รางวัลเลขท้าย 3 ตัว",
+        "reward": "4000",
+        "amount": 2,
+        "number": []
+      },
+      {
+        "id": "runningNumberBackTwo",
+        "name": "รางวัลเลขท้าย 2 ตัว",
+        "reward": "2000",
+        "amount": 1,
+        "number": []
+      }
+    ]
+  }
+}
