@@ -19,13 +19,19 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install deps
+        run: npm ci || npm i
+
+      # ติดตั้ง Chromium + system deps ให้พร้อมใช้งาน
+      - name: Install Playwright browsers
+        uses: microsoft/playwright-github-action@v1
+        with:
+          with-deps: true
 
       - name: Run scraper
         run: npm run scrape
 
-      - name: Commit & push
+      - name: Commit & push if changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
