@@ -9,9 +9,7 @@
         "name": "รางวัลที่ 1",
         "reward": "6000000",
         "amount": 1,
-        "number": [
-          ""
-        ]
+        "number": []
       },
       {
         "id": "prizeFirstNear",
@@ -26,21 +24,21 @@
         "id": "runningNumberFrontThree",
         "name": "รางวัลเลขหน้า 3 ตัว",
         "reward": "4000",
-        "amount": 2,
+        "amount": 0,
         "number": []
       },
       {
         "id": "runningNumberBackThree",
         "name": "รางวัลเลขท้าย 3 ตัว",
         "reward": "4000",
-        "amount": 2,
+        "amount": 0,
         "number": []
       },
       {
         "id": "runningNumberBackTwo",
         "name": "รางวัลเลขท้าย 2 ตัว",
         "reward": "2000",
-        "amount": 1,
+        "amount": 0,
         "number": []
       }
     ]
