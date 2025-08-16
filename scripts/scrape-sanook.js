@@ -21,23 +21,24 @@ function thaiDateToYMD(dateStr) {
   return `${year}${mm}${d}`;
 }
 
-function squash(s) {
-  if (!s) return "";
-  return s
+function cleanLine(s) {
+  return (s || "")
     .replace(/\u00a0/g, " ")
     .replace(/[ \t]+/g, " ")
     .replace(/\r/g, "")
-    .replace(/\n{2,}/g, "\n");
+    .trim();
 }
-function onlyDigitsArr(arr) {
-  return (arr || []).map(x => x.trim()).filter(Boolean);
+function digitsIn(line, pattern) {
+  // คืน array ตัวเลขที่ตรงกับ pattern (เช่น 6 หลัก / 3 หลัก / 2 หลัก)
+  const re = new RegExp(pattern, "g");
+  return (line.match(re) || []);
 }
 
 (async () => {
   const browser = await chromium.launch({ args: ["--no-sandbox"] });
   const page = await browser.newPage({ userAgent: "Mozilla/5.0" });
 
-  // 1) หน้า list หา link งวดล่าสุด (href มี /lotto/check/)
+  // 1) หา URL งวดล่าสุด
   await page.goto(LIST_URL, { waitUntil: "domcontentloaded" });
   const latestHref = await page.evaluate(() => {
     const as = Array.from(document.querySelectorAll("a[href*='/lotto/check/']"));
@@ -48,104 +49,115 @@ function onlyDigitsArr(arr) {
     throw new Error("ไม่พบลิงก์งวดล่าสุดจากหน้า list");
   }
 
-  // 2) เข้าไปหน้า check งวดล่าสุด
+  // 2) เข้าไปหน้า “ตรวจหวยงวดนี้”
   await page.goto(latestHref, { waitUntil: "networkidle" });
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(1000);
 
-  const rawText = await page.evaluate(() => document.body.innerText || "");
-  const html = await page.content();
+  // ดึงข้อความทุกบรรทัดจากบทความ (เฉพาะส่วนเนื้อหา)
+  const articleText = await page.evaluate(() => {
+    // กว้าง ๆ: ลองหาคอนเทนเนอร์บทความ ถ้าไม่เจอ ใช้ทั้ง body
+    const root =
+      document.querySelector("article") ||
+      document.querySelector("[class*='content']") ||
+      document.body;
+    return root.innerText;
+  });
+
   await browser.close();
 
-  const textFlat = squash(rawText);
+  const raw = articleText || "";
+  const lines = raw.split("\n").map(cleanLine).filter(Boolean);
 
-  // วันที่ไทย
-  const dateTH =
-    (textFlat.match(/งวดวันที่\s+(\d{1,2}\s+[^\s]+\s+\d{4})/) || [])[1] ||
-    (textFlat.match(/ประจำงวดวันที่\s+(\d{1,2}\s+[^\s]+\s+\d{4})/) || [])[1] ||
-    "";
-
+  // เขียนไฟล์ debug เผื่อดู pattern ถัดไป
+  const flat = lines.join("\n");
+  let dateTH =
+    (flat.match(/งวดวันที่\s+(\d{1,2}\s+[^\s]+\s+\d{4})/) || [])[1] ||
+    (flat.match(/ประจำงวดวันที่\s+(\d{1,2}\s+[^\s]+\s+\d{4})/) || [])[1] || "";
   const ymd = thaiDateToYMD(dateTH) || "00000000";
+  fs.writeFileSync(path.join(DATA_DIR, `raw-${ymd}.txt`), flat);
 
-  // เก็บดีบัก
-  fs.writeFileSync(path.join(DATA_DIR, `raw-${ymd}.txt`), textFlat);
-  fs.writeFileSync(path.join(DATA_DIR, `html-${ymd}.html`), html);
+  // 3) เดินบรรทัดแบบ state machine: เจอหัวข้อ -> เก็บตัวเลขจากบรรทัดถัด ๆ ไป
+  const state = { section: null };
+  const result = {
+    first: "",
+    near: [],
+    front3: [],
+    back3: [],
+    back2: []
+  };
 
-  // ========= พยายามจับตัวเลขหลายรูปแบบ =========
-  // รางวัลที่ 1
-  let prizeFirst =
-    (textFlat.match(/รางวัลที่\s*1[^\d]+(\d{6})/) || [])[1] ||
-    (textFlat.match(/รางวัลที่หนึ่ง[^\d]+(\d{6})/) || [])[1] || "";
+  const isHeader = (line, key) => new RegExp(key).test(line);
 
-  // ข้างเคียงรางวัลที่ 1
-  let nearBlock =
-    (textFlat.match(/ข้างเคียงรางวัลที่\s*1[^0-9]+((?:\d{6}[^\d]{0,5}){1,2})/) || [])[1] || "";
-  let prizeFirstNear = onlyDigitsArr(nearBlock.match(/\d{6}/g));
+  for (let i = 0; i < lines.length; i++) {
+    const L = lines[i];
 
-  // เลขหน้า 3 ตัว
-  let frontBlock =
-    (textFlat.match(/เลขหน้า\s*3\s*ตัว[^0-9]+((?:\d{3}[^\d]{0,3}){1,4})/) || [])[1] || "";
-  let front3 = onlyDigitsArr(frontBlock.match(/\b\d{3}\b/g));
-
-  // เลขท้าย 3 ตัว
-  let back3Block =
-    (textFlat.match(/เลขท้าย\s*3\s*ตัว[^0-9]+((?:\d{3}[^\d]{0,3}){1,4})/) || [])[1] || "";
-  let back3 = onlyDigitsArr(back3Block.match(/\b\d{3}\b/g));
-
-  // เลขท้าย 2 ตัว
-  let back2 = (textFlat.match(/เลขท้าย\s*2\s*ตัว[^0-9]+(\d{2})/) || [])[1] || "";
-  let back2Arr = back2 ? [back2] : [];
-
-  // ถ้ายังว่าง ลองจาก HTML flatten อีกที
-  if (!prizeFirst || !front3.length || !back3.length || !back2Arr.length || !prizeFirstNear.length) {
-    const htmlFlat = squash(html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "));
-    if (!prizeFirst) {
-      prizeFirst = (htmlFlat.match(/รางวัลที่\s*1[^\d]+(\d{6})/) || [])[1] || "";
+    if (isHeader(L, /งวดวันที่/)) {
+      const m = L.match(/งวดวันที่\s+(\d{1,2}\s+[^\s]+\s+\d{4})/);
+      if (m) dateTH = m[1];
+      state.section = null;
+      continue;
     }
-    if (!front3.length) {
-      const f2 = (htmlFlat.match(/เลขหน้า\s*3\s*ตัว[^0-9]+((?:\d{3}[^0-9]{0,5}){1,4})/) || [])[1] || "";
-      const arr = f2.match(/\b\d{3}\b/g);
-      if (arr) front3 = onlyDigitsArr(arr);
+
+    if (isHeader(L, /รางวัลที่\s*1\b|รางวัลที่หนึ่ง/)) { state.section = "first"; continue; }
+    if (isHeader(L, /เลขหน้า\s*3\s*ตัว/))               { state.section = "front3"; continue; }
+    if (isHeader(L, /เลขท้าย\s*3\s*ตัว/))               { state.section = "back3"; continue; }
+    if (isHeader(L, /เลขท้าย\s*2\s*ตัว/))               { state.section = "back2"; continue; }
+    if (isHeader(L, /ข้างเคียงรางวัลที่\s*1/))          { state.section = "near";   continue; }
+
+    // ถ้าอยู่ใน section ให้เก็บตัวเลขของบรรทัดนี้
+    if (state.section === "first" && !result.first) {
+      const nums = digitsIn(L, /\b\d{6}\b/);
+      if (nums.length) result.first = nums[0];
+      continue;
     }
-    if (!back3.length) {
-      const b3 = (htmlFlat.match(/เลขท้าย\s*3\s*ตัว[^0-9]+((?:\d{3}[^0-9]{0,5}){1,4})/) || [])[1] || "";
-      const arr = b3.match(/\b\d{3}\b/g);
-      if (arr) back3 = onlyDigitsArr(arr);
+    if (state.section === "front3" && result.front3.length < 4) {
+      const nums = digitsIn(L, /\b\d{3}\b/);
+      if (nums.length) result.front3.push(...nums);
+      continue;
     }
-    if (!back2Arr.length) {
-      const b2 = (htmlFlat.match(/เลขท้าย\s*2\s*ตัว[^0-9]+(\d{2})/) || [])[1] || "";
-      if (b2) back2Arr = [b2];
+    if (state.section === "back3" && result.back3.length < 4) {
+      const nums = digitsIn(L, /\b\d{3}\b/);
+      if (nums.length) result.back3.push(...nums);
+      continue;
     }
-    if (!prizeFirstNear.length) {
-      const n2 = (htmlFlat.match(/ข้างเคียงรางวัลที่\s*1[^0-9]+((?:\d{6}[^0-9]{0,5}){1,2})/) || [])[1] || "";
-      const arr = n2.match(/\d{6}/g);
-      if (arr) prizeFirstNear = onlyDigitsArr(arr);
+    if (state.section === "back2" && result.back2.length < 1) {
+      const nums = digitsIn(L, /\b\d{2}\b/);
+      if (nums.length) result.back2.push(nums[0]);
+      continue;
+    }
+    if (state.section === "near" && result.near.length < 2) {
+      const nums = digitsIn(L, /\b\d{6}\b/);
+      if (nums.length) result.near.push(...nums);
+      continue;
     }
   }
 
-  const result = {
+  // 4) จัด JSON ให้เข้ากับ schema เดิม
+  const output = {
     status: "success",
     response: {
       date: dateTH || "(unknown)",
       endpoint: latestHref,
       prizes: [
-        { id: "prizeFirst", name: "รางวัลที่ 1", reward: "6000000", amount: 1, number: prizeFirst ? [prizeFirst] : [] },
-        { id: "prizeFirstNear", name: "รางวัลข้างเคียงรางวัลที่ 1", reward: "100000", amount: 2, number: prizeFirstNear }
+        { id: "prizeFirst",     name: "รางวัลที่ 1",                reward: "6000000", amount: 1,   number: result.first ? [result.first] : [] },
+        { id: "prizeFirstNear", name: "รางวัลข้างเคียงรางวัลที่ 1", reward: "100000",  amount: 2,   number: result.near }
       ],
       runningNumbers: [
-        { id: "runningNumberFrontThree", name: "รางวัลเลขหน้า 3 ตัว", reward: "4000", amount: front3.length, number: front3 },
-        { id: "runningNumberBackThree", name: "รางวัลเลขท้าย 3 ตัว", reward: "4000", amount: back3.length, number: back3 },
-        { id: "runningNumberBackTwo", name: "รางวัลเลขท้าย 2 ตัว", reward: "2000", amount: back2Arr.length, number: back2Arr }
+        { id: "runningNumberFrontThree", name: "รางวัลเลขหน้า 3 ตัว", reward: "4000", amount: result.front3.length, number: result.front3 },
+        { id: "runningNumberBackThree",  name: "รางวัลเลขท้าย 3 ตัว",  reward: "4000", amount: result.back3.length,  number: result.back3 },
+        { id: "runningNumberBackTwo",    name: "รางวัลเลขท้าย 2 ตัว",  reward: "2000", amount: result.back2.length,  number: result.back2 }
       ]
     }
   };
 
   const latestPath = path.join(DATA_DIR, "latest.json");
-  const ymdPath = path.join(DATA_DIR, `${ymd}.json`);
-  fs.writeFileSync(latestPath, JSON.stringify(result, null, 2));
-  fs.writeFileSync(ymdPath, JSON.stringify(result, null, 2));
-  console.log("✔️ saved:", latestPath, ymdPath);
+  const datedPath  = path.join(DATA_DIR, `${ymd}.json`);
+  fs.writeFileSync(latestPath, JSON.stringify(output, null, 2));
+  fs.writeFileSync(datedPath, JSON.stringify(output, null, 2));
+  console.log("✔️ saved:", latestPath, datedPath);
 
-  if (!prizeFirst || !front3.length || !back3.length || !back2Arr.length) {
-    console.warn("⚠️ Some fields are empty. Check data/raw-*.txt or data/html-*.html to adjust regex.");
+  // แจ้งเตือนถ้ายังว่าง จะได้เปิด raw-*.txt มาดูหน้าจริง
+  if (!result.first || !result.front3.length || !result.back3.length || !result.back2.length) {
+    console.warn("⚠️ ยังมีฟิลด์ว่าง: เปิด data/raw-%s.txt เพื่อตรวจรูปแบบบรรทัด", ymd);
   }
 })();
