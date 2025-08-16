@@ -1,11 +1,12 @@
 {
-  "name": "lotto-sanook-json",
+  "name": "get-lotto",
   "private": true,
   "type": "module",
   "scripts": {
-    "scrape": "node scripts/scrape-sanook.js"
+    "scrape": "node scripts/scrape-sanook-http.js"
   },
   "dependencies": {
-    "playwright": "^1.47.0"
+    "node-fetch": "^3.3.2",
+    "cheerio": "^1.0.0-rc.12"
   }
 }
